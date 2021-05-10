@@ -589,7 +589,6 @@ void CPGLIB::Cycle_Groups_Balanced(){
       // Gradient computation
       Compute_Gradient(x_std_aug, y, proposal, grad_vector);
       Compute_Gradient_Step(grad_step, grad_vector);
-      grad_step = grad_step;
 
       // Line search for (local) descent (with acceleration)
       do{
