@@ -70,11 +70,11 @@ void CV_CPGLIB::Initialize(){
   // Computing the grid for lambda_sparsity
   if(n>p){
     eps_sparsity = 1e-4;
-    eps_diversity = 7.5e-4;
+    eps_diversity = 2.5e-4;
   }
   else{
     eps_sparsity = 1e-2;
-    eps_diversity = 7.5e-2;
+    eps_diversity = 2.5e-2;
   }
   Compute_Lambda_Sparsity_Grid();
   
@@ -166,6 +166,7 @@ double CV_CPGLIB::Get_Lambda_Diversity_Max(){
     beta_grid.Set_Lambda_Diversity(lambda_diversity_max);
     beta_grid.Cycle_Groups_Balanced();
   }
+  // std::cout << "lambda_diversity_max initial: " << lambda_diversity_max << std::endl;
   
   // If we could not kill all the interactions
   if(Check_Interactions_Beta(beta_grid.Get_Coef_Scaled())){
@@ -195,8 +196,9 @@ double CV_CPGLIB::Get_Lambda_Diversity_Max(){
                                                      n_lambda_diversity));
   }
   
+  // std::cout << "lambda_diversity_min: " << lambda_diversity_grid[0] << std::endl;
+  // std::cout << "lambda_diversity_max: " << lambda_diversity_grid[n_lambda_diversity-1] << std::endl << std::endl;
   // Return the diversity penalty parameter 
-  // std::cout << "lambda_diversity_max: " << lambda_diversity_max << std::endl;
   return(lambda_diversity_max);
 }
 
@@ -581,6 +583,8 @@ void CV_CPGLIB::Compute_CV_Betas(){
   // std::cout << "lambda_sparsity_opt: " << lambda_sparsity_opt << std::endl;
   // std::cout << "lambda_diversity_opt: " << lambda_diversity_opt << std::endl << std::endl;
 
+  // Adjustment for ensemble
+  lambda_sparsity_opt = lambda_diversity_opt/G;
   // Computing the solutions until the optimal is no longer a significant improvement
   arma::uword cv_iterations = 1;
   do{
