@@ -26,14 +26,12 @@ ProxGrad::ProxGrad(arma::mat x, arma::vec y,
                    arma::uword & include_intercept,
                    double alpha_s, 
                    double lambda_sparsity,
-                   arma::uword & acceleration,
                    double tolerance, arma::uword max_iter):
   x(x), y(y),
   type(type),
   include_intercept(include_intercept),
   alpha_s(alpha_s), 
   lambda_sparsity(lambda_sparsity),
-  acceleration(acceleration),
   tolerance(tolerance), max_iter(max_iter){
   
   // Initializing the object
@@ -68,6 +66,7 @@ void ProxGrad::Initialize(){
     Compute_Likelihood = &ProxGrad::Linear_Likelihood;
     Compute_Gradient = &ProxGrad::Linear_Gradient;
     Compute_Expected = &ProxGrad::Linear_Expected;
+    step_size = 2 / arma::max(arma::eig_sym(x_std_aug.t() * x_std_aug));
     
     if(include_intercept)
       betas[0] = arma::mean(y);
@@ -78,38 +77,11 @@ void ProxGrad::Initialize(){
     Compute_Likelihood = &ProxGrad::Logistic_Likelihood;
     Compute_Gradient = &ProxGrad::Logistic_Gradient;
     Compute_Expected = &ProxGrad::Logistic_Expected;
+    step_size = 4 / arma::max(arma::eig_sym(x_std_aug.t() * x_std_aug));
     
     if(include_intercept)
       betas[0] = std::log(arma::mean(y)/(1-arma::mean(y)));
   }
-  
-  else if(type==3){ // Gamma GLM
-    
-    Compute_Likelihood = &ProxGrad::Gamma_Likelihood;
-    Compute_Gradient = &ProxGrad::Gamma_Gradient;
-    Compute_Expected = &ProxGrad::Gamma_Expected;
-    if(include_intercept)
-      betas[0] = std::log(arma::mean(y));
-  }
-    
-  else if(type==4){ // Poisson GLM
-    
-    Compute_Likelihood = &ProxGrad::Poisson_Likelihood;
-    Compute_Gradient = &ProxGrad::Poisson_Gradient;
-    Compute_Expected = &ProxGrad::Poisson_Expected;
-    
-    if(include_intercept)
-      betas[0] = std::log(arma::mean(y));
-  }
-  
-  // Gradient step sizes options
-  Compute_Gradient_Step = &ProxGrad::AdaGrad;
-  
-  // Gradient proposals
-  if(acceleration)
-    Proposal_Iteration = &ProxGrad::FISTA;
-  else 
-    Proposal_Iteration = &ProxGrad::ISTA;
   
 }
 
@@ -206,58 +178,47 @@ double ProxGrad::Get_Objective_Value_New(){
 }
 
 // Function to compute coefficients
-void ProxGrad::Compute_Coef(){
+void ProxGrad::Coef_Update(){
   
   // Variables for proximal gradient descent
   arma::vec proposal = betas;
   iter_count = 0;
   arma::vec prox_vector = arma::ones(p);
   arma::vec prox_threshold, prox_scale;
+  arma::vec prox_threshold_step = lambda_sparsity*alpha_s*arma::ones(p);
+  arma::vec prox_scale_step = lambda_sparsity*(1-alpha_s)*arma::ones(p);
   
-  // Variables for Nesterov acceleration
-  double t_prev = 1, t_next = 1;
-  
-  // Initial gradient computation
-  Compute_Gradient(x_std_aug, y, proposal, grad_vector);
-  Compute_Gradient_Step(grad_step, grad_vector);
-
-  // Proximal gradient descent iterations
-  do{
-    
-    betas = new_betas;
-    Compute_Gradient(x_std_aug, y, proposal, grad_vector);
-    Compute_Gradient_Step(grad_step, grad_vector);
-    
-    // Line search for (local) descent with acceleration
-    do{
-      
-      // Proximal gradient descent step
-      prox_vector = proposal - grad_step % grad_vector;
-      prox_threshold = grad_step*lambda_sparsity*alpha_s;
-      prox_scale = grad_step*lambda_sparsity*(1-alpha_s);
-      new_betas = Soft(prox_vector, prox_threshold, prox_scale);
-      new_betas[0] = prox_vector[0]; // Adjustment for intercept term (no shrinkage)
-      
-      // Line search adjustment
-      grad_step = grad_step*LS_CONST_PARAMETER;
-
-    } while (Get_Objective_Value_New() > Get_Objective_Value());
-      
-    // (!) The above conditional can be replaced by the quadratic approximation 
-      
-    // Iteration proposal
-    Proposal_Iteration(t_prev, t_next, 
-                       betas, new_betas, proposal);
-
-    // Iteration for algorithm
-    iter_count++;
-
-  } while ((iter_count <= max_iter) && (arma::max(arma::square(new_betas - betas)) > tolerance));
-  
-  // Final coefficients
+  // Proximal gradient descent iteration
   betas = new_betas;
+  Compute_Gradient(x_std_aug, y, proposal, grad_vector);
+  prox_vector = proposal - grad_vector*step_size;
+  prox_threshold = step_size*prox_threshold_step;
+  prox_scale = step_size*prox_scale_step;
+  new_betas = Soft(prox_vector, prox_threshold, prox_scale);
+  new_betas[0] = prox_vector[0]; // Adjustment for intercept term (no shrinkage)
+}
 
-  // Scaling coefficients
+// Function to compute coefficients
+void ProxGrad::Compute_Coef(){
+  
+  for(arma::uword iter=0; iter<max_iter; iter++){
+    
+    // Update of coefficients
+    Coef_Update();
+    
+    // End of coordinate descent if variables are already converged
+    if(arma::square(arma::mean(new_betas,1)-arma::mean(betas,1)).max()<tolerance){
+      betas = new_betas;
+      Scale_Coefficients();
+      Scale_Intercept();
+      return;
+    }
+    
+    // Adjusting the intercept and betas
+    betas = new_betas;
+  }
+  
+  // Scaling of coefficients and intercept
   Scale_Coefficients();
   Scale_Intercept();
 }
@@ -296,32 +257,6 @@ ProxGrad::~ProxGrad(){
   // Class destructor
 }
 
-// ----------------------------------
-// Static Functions - Gradient Steps
-// ----------------------------------
-
-void ProxGrad::AdaGrad(arma::vec & grad_step, arma::vec & grad_vector){
-  
-  grad_step = arma::ones(grad_vector.n_elem)/arma::norm(grad_vector);
-}
-
-/*
-* --------------------------------------
-* Static Functions - Descent Iterations
-* --------------------------------------
-*/
-
-// Gradient proposals iterations
-void ProxGrad::ISTA(double & t_prev, double & t_next, arma::vec & betas, arma::vec & new_betas, arma::vec & proposal){
-  
-  t_next = (1 + std::pow(1 + 4*std::pow(t_prev, 2), 0.5))/2;
-  proposal = new_betas + ((t_prev - 1)/t_next) * (new_betas - betas);
-}
-
-void ProxGrad::FISTA(double & t_prev, double & t_next, arma::vec & betas, arma::vec & new_betas, arma::vec & proposal){
-  
-  proposal = new_betas;
-}
 
 /*
 * -----------------------------------------------------------
@@ -344,19 +279,6 @@ double ProxGrad::Logistic_Likelihood(arma::mat & x, arma::vec & y,
   return(arma::accu(arma::log(1 + arma::exp(linear_fit)) - linear_fit % y)/y.n_elem);
 }
 
-double ProxGrad::Gamma_Likelihood(arma::mat & x, arma::vec & y, 
-                                  arma::vec & betas){
-  
-  arma::vec linear_fit = x*betas;
-  return(arma::accu(linear_fit + arma::exp(x*(-betas)) % y)/y.n_elem);
-}
-
-double ProxGrad::Poisson_Likelihood(arma::mat & x, arma::vec & y, 
-                                    arma::vec & betas){
-  
-  arma::vec linear_fit = x*betas;
-  return(arma::accu(arma::exp(linear_fit) - linear_fit % y)/y.n_elem);
-}
 
 /*
 * ------------------------------------------
@@ -378,19 +300,6 @@ void ProxGrad::Logistic_Gradient(arma::mat & x, arma::vec & y,
   grad_vector = x.t()*(1/(1 + arma::exp(x*(-betas))) - y)/y.n_elem;
 }
 
-// Gamma GLM - Gradient 
-void ProxGrad::Gamma_Gradient(arma::mat & x, arma::vec & y, 
-                              arma::vec & betas, arma::vec & grad_vector){
-  
-  grad_vector = x.t()*(arma::ones(y.n_elem) - arma::exp(x*(-betas)) % y)/y.n_elem;
-}
-
-// Poisson GLM - Gradient 
-void ProxGrad::Poisson_Gradient(arma::mat & x, arma::vec & y, 
-                                arma::vec & betas, arma::vec & grad_vector){
-  
-  grad_vector = x.t()*(arma::exp(x*betas) -  y)/y.n_elem;
-}
 
 
 /*
@@ -412,21 +321,6 @@ void ProxGrad::Logistic_Expected(arma::mat & x, arma::vec & betas,
   
   expected_val = 1/(1 + arma::exp(x*(-betas)));
 }
-
-// Gamma GLM - Expected Values 
-void ProxGrad::Gamma_Expected(arma::mat & x, arma::vec & betas, 
-                              arma::vec & expected_val){
-  
-  expected_val = arma::exp(x*betas);
-}
-
-// Poisson GLM - Expected Values 
-void ProxGrad::Poisson_Expected(arma::mat & x, arma::vec & betas, 
-                                arma::vec & expected_val){
-  
-  expected_val = arma::exp(x*betas);
-}
-
 
 
 

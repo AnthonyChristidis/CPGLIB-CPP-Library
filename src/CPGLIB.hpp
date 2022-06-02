@@ -5,7 +5,7 @@
 * Package Name: CPGLIB
 *
 * Created by Anthony-A. Christidis.
-* Copyright © Anthony-A. Christidis. All rights reserved.
+* Copyright ? Anthony-A. Christidis. All rights reserved.
 * ===========================================================
 */
 
@@ -14,7 +14,7 @@
 
 #include <RcppArmadillo.h>
 
-#include "config.h"
+#include "config.h" 
 
 class CPGLIB{
   
@@ -35,8 +35,6 @@ private:
   arma::vec lambda_diversity_grid;
   arma::vec prox_threshold_step;
   arma::vec prox_scale_step;
-  arma::uword permutate_search;
-  arma::uword acceleration;
   double tolerance;
   arma::uword max_iter;
   
@@ -58,6 +56,7 @@ private:
   arma::vec new_active_set;
   arma::mat expected_val; // Vector for the expected values
   arma::uword iter_count;
+  double step_size;
   
   // Function to initial the object characteristics
   void Initialize();
@@ -123,8 +122,6 @@ public:
          arma::uword & include_intercept,
          double alpha_s, double alpha_d,
          double lambda_sparsity, double lambda_diversity,
-         arma::uword & permutate_search,
-         arma::uword & acceleration,
          double tolerance, arma::uword max_iter);
   
   // Functions to set new data
@@ -166,14 +163,9 @@ public:
   double Get_Objective_Value();
   
   // Function to compute coefficients
-  void Compute_Coef(arma::uword & group);
-  void Cycle_Groups();
-  void Cycle_Groups_Grid();
-  
-  // Function to compute coefficients (balanced cycling)
-  void Cycle_Groups_Balanced();
-  void Cycle_Groups_Balanced_Grid();
-  
+  void Coef_Update(arma::uword & group);
+  void Compute_Coef();
+
   // Function to return the number of iterations for convergence
   arma::uword Get_Iter();
   
@@ -187,23 +179,6 @@ public:
   arma::rowvec Get_Intercept();
   arma::vec Get_Intercept_Scaled();
   
-  // ----------------------------------
-  // Static Functions - Gradient Steps
-  // ----------------------------------
-  
-  static void AdaGrad(arma::vec & grad_step, arma::vec & grad_vector);
-  
-  // --------------------------------------
-  // Static Functions - Descent Iterations
-  // --------------------------------------
-  
-  static void ISTA(double & t_prev, double & t_next, 
-                   arma::mat & betas, arma::mat & new_betas, arma::vec & proposal,
-                   arma::uword & group);
-  static void FISTA(double & t_prev, double & t_next, 
-                    arma::mat & betas, arma::mat & new_betas, arma::vec & proposal,
-                    arma::uword & group);
-  
   // ---------------------------------
   // Static Functions - GLM Dependent
   // ---------------------------------
@@ -215,23 +190,13 @@ public:
   static double Logistic_Likelihood(arma::mat & x, arma::vec & y, 
                                     arma::mat & betas, 
                                     arma::uword & group);
-  static double Gamma_Likelihood(arma::mat & x, arma::vec & y, 
-                                 arma::mat & betas, 
-                                 arma::uword & group);
-  static double Poisson_Likelihood(arma::mat & x, arma::vec & y, 
-                                   arma::mat & betas, 
-                                   arma::uword & group);
   
   // Static FUnctions - Gradients Computation
   static void Linear_Gradient(arma::mat & x, arma::vec & y, 
                               arma::mat & betas, arma::vec & grad_vector);
   static void Logistic_Gradient(arma::mat & x, arma::vec & y, 
                                 arma::mat & betas, arma::vec & grad_vector);
-  static void Gamma_Gradient(arma::mat & x, arma::vec & y, 
-                             arma::mat & betas, arma::vec & grad_vector);
-  static void Poisson_Gradient(arma::mat & x, arma::vec & y, 
-                               arma::mat & betas, arma::vec & grad_vector);
-  
+
   // Static FUnctions - Expected Values Computation
   static void Linear_Expected(arma::mat & x, arma::mat & betas, 
                               arma::vec & expected_val,
@@ -239,12 +204,6 @@ public:
   static void Logistic_Expected(arma::mat & x, arma::mat & betas, 
                                 arma::vec & expected_val,
                                 arma::uword & group);
-  static void Gamma_Expected(arma::mat & x, arma::mat & betas, 
-                             arma::vec & expected_val,
-                             arma::uword & group);
-  static void Poisson_Expected(arma::mat & x, arma::mat & betas, 
-                               arma::vec & expected_val,
-                               arma::uword & group);
   
   // Destructor
   ~CPGLIB();

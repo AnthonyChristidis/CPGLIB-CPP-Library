@@ -30,7 +30,6 @@ private:
   // double alpha_d;
   arma::uword n_lambda_sparsity;
   // arma::uword n_lambda_diversity;
-  arma::uword acceleration;
   double tolerance;
   arma::uword max_iter;
   arma::uword n_folds;
@@ -48,6 +47,7 @@ private:
   arma::vec intercepts;
   arma::mat betas;
   arma::vec cv_errors_sparsity;
+  arma::mat cv_errors_sparsity_mat;
   // arma::vec cv_errors_diversity;
   double cv_opt_old;
   double cv_opt_new;
@@ -62,26 +62,14 @@ private:
   
   // Method to get the grid of lambda_sparsity
   void Compute_Lambda_Sparsity_Grid();
-  // // Method to get diversity penalty parameter that kills all interactions
-  // double Get_Lambda_Diversity_Max();
-  // // Method to get the grid of lambda_diversity
-  // void Compute_Lambda_Diversity_Grid();
-  
-  // // Function that checks if there are interactions between groups in the matrix of betas
-  // bool Check_Interactions_Beta(arma::mat beta);
-  // // Function to returns a vector with ones corresponding to the betas that have interactions.
-  // arma::uvec Check_Interactions(arma::cube & betas);
-  
+
   // Private function to create the folds
   arma::uvec Set_Diff(const arma::uvec & big, const arma::uvec & small);
   
-  // Private function to compute the CV-MSPE over the folds
-  void Compute_CV_Deviance_Sparsity(arma::uword & sparsity_ind,
+  // Functions to compute deviance
+  void Compute_CV_Deviance_Sparsity(arma::uword & sparsity_ind, arma::uword & fold_ind,
                                     arma::mat x_test, arma::vec y_test,
                                     double intercept, arma::vec betas);
-  // void Compute_CV_Deviance_Diversity(int diversity_ind,
-  //                                    arma::mat x_test, arma::vec y_test,
-  //                                    arma::vec intercept, arma::mat betas);
   double (*Compute_Deviance)(arma::mat & x, arma::vec & y,
           double & intercept, arma::vec & betas);
   
@@ -93,7 +81,6 @@ public:
               arma::uword & include_intercept,
               double & alpha_s,
               arma::uword & n_lambda_sparsity, 
-              arma::uword & acceleration,
               double & tolerance, arma::uword & max_iter,
               arma::uword & n_folds,
               arma::uword & n_threads);
@@ -109,34 +96,23 @@ public:
   // Method to set alpha_s to new value and return current alpha_s
   void Set_Alpha_Sparsity(double alpha_s);
   double Get_Alpha_Sparsity();
-  // // Method to set alpha_d to new value and return current alpha_d
-  // void Set_Alpha_Diversity(double alpha_s);
-  // double Get_Alpha_Diversity();
-  
+
   // Method to get the grid of lambda sparsity
   arma::vec Get_Lambda_Sparsity_Grid();
-  // // Method to get the grid of lambda diversity
-  // arma::vec Get_Lambda_Diversity_Grid();
-  
+
   // Cross-validation - Sparsity
   arma::vec Get_CV_Error_Sparsity();
-  // // Cross-validation - Diversity
-  // arma::vec Get_CV_Error_Diversity();
-  
+
   // Optimal penalty parameter - Sparsity
   double Get_lambda_sparsity_opt();
-  // // Optimal penalty parameter - Diversity
-  // double Get_lambda_diversity_opt();
-  
+
   // Methods to return coefficients
   arma::mat Get_Coef();
   arma::vec Get_Intercept();
   
   // Optimal sparsity parameter
   arma::uword Get_Optimal_Index_Sparsity();
-  // // Optimal diversity parameter
-  // arma::uword Get_Optimal_Index_Diversity();
-  
+
   // Computing the solutions over a grid for folds. Grid is either for the sparsity or the diverity (one of them is fixed)
   void Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind);
 
@@ -151,11 +127,7 @@ public:
                                 double & intercept, arma::vec & betas);
   static double Logistic_Deviance(arma::mat & x, arma::vec & y,
                                   double & intercept, arma::vec & betas);
-  static double Gamma_Deviance(arma::mat & x, arma::vec & y,
-                               double & intercept, arma::vec & betas);
-  static double Poisson_Deviance(arma::mat & x, arma::vec & y,
-                                 double & intercept, arma::vec & betas);
-  
+
   // Destructor
   ~CV_ProxGrad();
 };

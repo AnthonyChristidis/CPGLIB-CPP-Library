@@ -23,9 +23,6 @@ Rcpp::List CPGLIB_Main(arma::mat & x, arma::vec & y,
                        arma::uword & include_intercept, 
                        double & alpha_s, double & alpha_d,
                        double & lambda_sparsity, double & lambda_diversity,
-                       arma::uword & balanced_cycling,
-                       arma::uword & acceleration,
-                       arma::uword & permutate_search,
                        double & tolerance, arma::uword & max_iter){
   
   CPGLIB model = CPGLIB(x, y, 
@@ -34,14 +31,10 @@ Rcpp::List CPGLIB_Main(arma::mat & x, arma::vec & y,
                         include_intercept, 
                         alpha_s, alpha_d,
                         lambda_sparsity, lambda_diversity,
-                        permutate_search,
-                        acceleration, 
                         tolerance, max_iter);
   
   // Computing coefficients
-  if(balanced_cycling)
-    model.Cycle_Groups_Balanced_Grid(); else
-      model.Cycle_Groups_Grid();
+  model.Compute_Coef(); 
   
   // Output formatting
   Rcpp::List output;

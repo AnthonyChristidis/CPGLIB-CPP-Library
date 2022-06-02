@@ -30,9 +30,6 @@ private:
   double alpha_d;
   arma::uword n_lambda_sparsity;
   arma::uword n_lambda_diversity;
-  arma::uword balanced_cycling;
-  arma::uword permutate_search;
-  arma::uword acceleration;
   double tolerance;
   arma::uword max_iter;
   arma::uword n_folds;
@@ -51,7 +48,9 @@ private:
   arma::mat intercepts;
   arma::cube betas;
   arma::vec cv_errors_sparsity;
+  arma::mat cv_errors_sparsity_mat;
   arma::vec cv_errors_diversity;
+  arma::mat cv_errors_diversity_mat;
   double cv_opt_old;
   double cv_opt_new;
   arma::uword index_sparsity_opt;
@@ -79,12 +78,6 @@ private:
   arma::uvec Set_Diff(const arma::uvec & big, const arma::uvec & small);
   
   // Private function to compute the CV-MSPE over the folds
-  void Compute_CV_Deviance_Sparsity(int & sparsity_ind,
-                                    arma::mat x_test, arma::vec y_test,
-                                    arma::vec intercept, arma::mat betas);
-  void Compute_CV_Deviance_Diversity(int & diversity_ind,
-                                     arma::mat x_test, arma::vec y_test,
-                                     arma::vec intercept, arma::mat betas);
   double (*Compute_Deviance)(arma::mat x, arma::vec y,
           arma::vec intercept, arma::mat betas);
   
@@ -97,9 +90,6 @@ public:
             arma::uword & include_intercept,
             double & alpha_s, double & alpha_d,
             arma::uword & n_lambda_sparsity, arma::uword & n_lambda_diversity,
-            arma::uword & balanced_cycling,
-            arma::uword & permutate_search,
-            arma::uword & acceleration,
             double & tolerance, arma::uword & max_iter,
             arma::uword & n_folds,
             arma::uword & n_threads);
@@ -146,9 +136,7 @@ public:
   // Computing the solutions over a grid for folds. Grid is either for the sparsity or the diverity (one of them is fixed)
   void Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind,
                        bool & diversity_search);
-  void Compute_CV_Grid_Balanced(arma::uvec & sample_ind, arma::uvec & fold_ind,
-                                bool & diversity_search);
-  
+
   // Initialization Error
   void Get_CV_Sparsity_Initial();
   
@@ -164,11 +152,7 @@ public:
                                 arma::vec intercept, arma::mat betas);
   static double Logistic_Deviance(arma::mat x, arma::vec y,
                                   arma::vec intercept, arma::mat betas);
-  static double Gamma_Deviance(arma::mat x, arma::vec y,
-                               arma::vec intercept, arma::mat betas);
-  static double Poisson_Deviance(arma::mat x, arma::vec y,
-                                 arma::vec intercept, arma::mat betas);
-  
+
   // Destructor
   ~CV_CPGLIB();
 };

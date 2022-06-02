@@ -5,7 +5,7 @@
 * Package Name: SplitGLM
 *
 * Created by Anthony-A. Christidis.
-* Copyright © Anthony-A. Christidis. All rights reserved.
+* Copyright ? Anthony-A. Christidis. All rights reserved.
 * ===========================================================
 */
 
@@ -32,9 +32,6 @@ CV_CPGLIB::CV_CPGLIB(arma::mat & x, arma::vec & y,
                      arma::uword & include_intercept,
                      double & alpha_s, double & alpha_d,
                      arma::uword & n_lambda_sparsity, arma::uword & n_lambda_diversity,
-                     arma::uword & balanced_cycling,
-                     arma::uword & permutate_search,
-                     arma::uword & acceleration,
                      double & tolerance, arma::uword & max_iter,
                      arma::uword & n_folds,
                      arma::uword & n_threads): 
@@ -44,8 +41,6 @@ CV_CPGLIB::CV_CPGLIB(arma::mat & x, arma::vec & y,
   include_intercept(include_intercept), 
   alpha_s(alpha_s), alpha_d(alpha_d),
   n_lambda_sparsity(n_lambda_sparsity), n_lambda_diversity(n_lambda_diversity),
-  balanced_cycling(balanced_cycling),
-  permutate_search(permutate_search), acceleration(acceleration),
   tolerance(tolerance), max_iter(max_iter),
   n_folds(n_folds),
   n_threads(n_threads){
@@ -65,7 +60,9 @@ void CV_CPGLIB::Initialize(){
   intercepts = arma::zeros(G, n_lambda_sparsity);
   betas = arma::zeros(p, G, n_lambda_sparsity);
   cv_errors_sparsity = arma::zeros(n_lambda_sparsity);
+  cv_errors_sparsity_mat = arma::zeros(n_lambda_sparsity, n_folds);
   cv_errors_diversity = arma::zeros(n_lambda_diversity);
+  cv_errors_diversity_mat = arma::zeros(n_lambda_diversity, n_folds);
   
   // Computing the grid for lambda_sparsity
   if(n>p){
@@ -84,12 +81,6 @@ void CV_CPGLIB::Initialize(){
   }
   else if(type==2){ // Logistic Regression
     Compute_Deviance = &CV_CPGLIB::Logistic_Deviance;
-  }
-  else if(type==3){ // Gamma GLM
-    Compute_Deviance = &CV_CPGLIB::Gamma_Deviance;
-  }
-  else if(type==4){ // Poisson GLM
-    Compute_Deviance = &CV_CPGLIB::Poisson_Deviance;
   }
 }
 
@@ -144,7 +135,7 @@ arma::uvec CV_CPGLIB::Check_Interactions(arma::cube & betas){
 double CV_CPGLIB::Get_Lambda_Diversity_Max(){
   
   // Initial guess for the diversity penalty
-  double lambda_diversity_max = 3*G;
+  double lambda_diversity_max = G;
   
   // Split model to determine the maximum diversity parameter
   CPGLIB beta_grid = CPGLIB(x, y,
@@ -153,18 +144,16 @@ double CV_CPGLIB::Get_Lambda_Diversity_Max(){
                             include_intercept,
                             alpha_s, alpha_d, 
                             lambda_sparsity_opt, lambda_diversity_max,
-                            permutate_search,
-                            acceleration,
                             MAX_DIVERSITY_TOLERANCE, max_iter);
-  beta_grid.Cycle_Groups_Balanced();
+  beta_grid.Compute_Coef();
   arma::uword counter = 0;
   // While interactions remain, increase lambda_diversity_max by scaling it by a constant factor of two
   while(Check_Interactions_Beta(beta_grid.Get_Coef_Scaled()) & (counter<=GRID_INTERACTION_MAX_COUNTER)){
     
     counter++;
-    lambda_diversity_max = lambda_diversity_max*2;
+    lambda_diversity_max = lambda_diversity_max*2; 
     beta_grid.Set_Lambda_Diversity(lambda_diversity_max);
-    beta_grid.Cycle_Groups_Balanced();
+    beta_grid.Compute_Coef();
   }
   // std::cout << "lambda_diversity_max initial: " << lambda_diversity_max << std::endl;
   
@@ -184,7 +173,7 @@ double CV_CPGLIB::Get_Lambda_Diversity_Max(){
     for(int diversity_ind=n_lambda_diversity-1; diversity_ind>=0; diversity_ind--){
       
       beta_grid.Set_Lambda_Diversity(lambda_diversity_grid[diversity_ind]);
-      beta_grid.Cycle_Groups_Balanced();
+      beta_grid.Compute_Coef();
       if(Check_Interactions_Beta(beta_grid.Get_Coef_Scaled()))
         break;
     }
@@ -226,28 +215,6 @@ void CV_CPGLIB::Compute_Lambda_Diversity_Grid(){
   
   // Current grid
   lambda_diversity_grid = arma::exp(arma::linspace(std::log(eps_diversity*lambda_diversity_max), std::log(lambda_diversity_max), n_lambda_diversity));
-}
-
-// Private function to compute the CV-MSPE over the folds
-void CV_CPGLIB::Compute_CV_Deviance_Sparsity(int & sparsity_ind,
-                                             arma::mat x_test, arma::vec y_test,
-                                             arma::vec intercept, arma::mat betas){
-    
-  // Computing the CV-Error over the folds
-  for(arma::uword fold_ind=0; fold_ind<n_folds; fold_ind++)
-    cv_errors_sparsity[sparsity_ind] += (*Compute_Deviance)(x_test, y_test, intercept, betas) / n;
-  
-}
-
-// Private function to compute the CV-MSPE over the folds
-void CV_CPGLIB::Compute_CV_Deviance_Diversity(int & diversity_ind,
-                                              arma::mat x_test, arma::vec y_test,
-                                              arma::vec intercept, arma::mat betas){
-  
-  // Computing the CV-Error over the folds
-  for(arma::uword fold_ind=0; fold_ind<n_folds; fold_ind++)
-    cv_errors_diversity[diversity_ind] += (*Compute_Deviance)(x_test, y_test, intercept, betas) / n;
-  
 }
 
 // Functions to set new data
@@ -351,8 +318,6 @@ void CV_CPGLIB::Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind,
                                   include_intercept,
                                   alpha_s, alpha_d,
                                   lambda_sparsity_grid[n_lambda_sparsity-1], lambda_diversity_opt,
-                                  permutate_search,
-                                  acceleration,
                                   tolerance, max_iter);
       
       // Looping over the different sparsity penalty parameters
@@ -361,17 +326,17 @@ void CV_CPGLIB::Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind,
         // Setting the lambda_sparsity value
         CPGLIB_fold.Set_Lambda_Sparsity(lambda_sparsity_grid[sparsity_ind]);
         // Computing the betas for the fold (new lambda_sparsity)
-        CPGLIB_fold.Cycle_Groups();
+        CPGLIB_fold.Compute_Coef();
         // Computing the deviance for the fold (new lambda_sparsity)
-        Compute_CV_Deviance_Sparsity(sparsity_ind,
-                                     x.rows(test), y.elem(test),
-                                     CPGLIB_fold.Get_Intercept_Scaled(), CPGLIB_fold.Get_Coef_Scaled());
-        
+        cv_errors_sparsity_mat(sparsity_ind, fold) = (*Compute_Deviance)(x.rows(test), y.elem(test), 
+                               CPGLIB_fold.Get_Intercept_Scaled(), CPGLIB_fold.Get_Coef_Scaled());
+
       } // End of loop over the sparsity parameter values
       
     } // End of loop over the folds
     
     // Storing the optimal sparsity parameters
+    cv_errors_sparsity = arma::mean(cv_errors_sparsity_mat, 1);
     index_sparsity_opt = cv_errors_sparsity.index_min();
     lambda_sparsity_opt = lambda_sparsity_grid[index_sparsity_opt];
     cv_opt_new = arma::min(cv_errors_sparsity);
@@ -386,6 +351,7 @@ void CV_CPGLIB::Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind,
     cv_errors_diversity = arma::zeros(n_lambda_diversity);
     
     // Looping over the folds
+    # pragma omp parallel for num_threads(n_threads)
     for(arma::uword fold=0; fold<n_folds; fold++){ 
       
       // Get test and training samples
@@ -401,8 +367,6 @@ void CV_CPGLIB::Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind,
                                   include_intercept,
                                   alpha_s, alpha_d,
                                   lambda_sparsity_opt, lambda_diversity_grid[n_lambda_diversity-1],
-                                  permutate_search,
-                                  acceleration,
                                   tolerance, max_iter);
       
       // Looping over the different diversity penalty parameters
@@ -411,120 +375,17 @@ void CV_CPGLIB::Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind,
         // Setting the lambda_sparsity value
         CPGLIB_fold.Set_Lambda_Diversity(lambda_diversity_grid[diversity_ind]);
         // Computing the betas for the fold (new lambda_sparsity)
-        CPGLIB_fold.Cycle_Groups();
+        CPGLIB_fold.Compute_Coef();
         // Computing the deviance for the fold (new lambda_sparsity)
-        Compute_CV_Deviance_Diversity(diversity_ind,
-                                      x.rows(test), y.elem(test),
-                                      CPGLIB_fold.Get_Intercept_Scaled(), CPGLIB_fold.Get_Coef_Scaled());
+        cv_errors_diversity_mat(diversity_ind, fold) = (*Compute_Deviance)(x.rows(test), y.rows(test), 
+                                CPGLIB_fold.Get_Intercept_Scaled(), CPGLIB_fold.Get_Coef_Scaled());
         
       } // End of loop over the sparsity parameter values
       
     } // End of loop over the folds
     
     // Storing the optimal diversity parameters
-    index_diversity_opt = cv_errors_diversity.index_min();
-    lambda_diversity_opt = lambda_diversity_grid[index_diversity_opt];
-    cv_opt_new = arma::min(cv_errors_diversity);
-  }
-}
-
-// Computing the solutions over a grid for folds. Grid is either for the sparsity or the diverity (one of them is fixed)
-void CV_CPGLIB::Compute_CV_Grid_Balanced(arma::uvec & sample_ind, arma::uvec & fold_ind,
-                                         bool & diversity_search){ 
-  
-  if(!diversity_search){ // Search for optimal sparsity parameter
-    
-    // Initializing the sparsity CV Errors
-    cv_errors_sparsity = arma::zeros(n_lambda_sparsity);
-    
-    // Looping over the folds
-# pragma omp parallel for num_threads(n_threads)
-    for(arma::uword fold=0; fold<n_folds; fold++){ 
-      
-      // Get test and training samples
-      arma::uvec test = arma::linspace<arma::uvec>(fold_ind[fold],
-                                                   fold_ind[fold + 1] - 1,
-                                                   fold_ind[fold + 1] - fold_ind[fold]);
-      arma::uvec train = Set_Diff(sample_ind, test);
-      
-      // Initialization of the WEN objects (with the maximum value of lambda_sparsity_grid)
-      CPGLIB CPGLIB_fold = CPGLIB(x.rows(train), y.elem(train),
-                                  type, 
-                                  G, 
-                                  include_intercept,
-                                  alpha_s, alpha_d,
-                                  lambda_sparsity_grid[0], lambda_diversity_opt,
-                                  permutate_search,
-                                  acceleration,
-                                  tolerance, max_iter);
-      
-      // Looping over the different sparsity penalty parameters
-      for(int sparsity_ind=0; sparsity_ind<n_lambda_sparsity; sparsity_ind++){
-        
-        // Setting the lambda_sparsity value
-        CPGLIB_fold.Set_Lambda_Sparsity(lambda_sparsity_grid[sparsity_ind]);
-        // Computing the betas for the fold (new lambda_sparsity)
-        CPGLIB_fold.Cycle_Groups_Balanced();
-        // Computing the deviance for the fold (new lambda_sparsity)
-        Compute_CV_Deviance_Sparsity(sparsity_ind,
-                                     x.rows(test), y.elem(test),
-                                     CPGLIB_fold.Get_Intercept_Scaled(), CPGLIB_fold.Get_Coef_Scaled());
-        
-      } // End of loop over the sparsity parameter values
-      
-    } // End of loop over the folds
-    
-    // Storing the optimal sparsity parameters
-    index_sparsity_opt = cv_errors_sparsity.index_min();
-    lambda_sparsity_opt = lambda_sparsity_grid[index_sparsity_opt];
-    cv_opt_new = arma::min(cv_errors_sparsity);
-    
-  } 
-  else{
-    
-    // Computing the grid for the diversity parameter
-    Compute_Lambda_Diversity_Grid();
-    
-    // Initializing the diversity CV Errors
-    cv_errors_diversity = arma::zeros(n_lambda_diversity);
-    
-    // Looping over the folds
-    for(arma::uword fold=0; fold<n_folds; fold++){ 
-      
-      // Get test and training samples
-      arma::uvec test = arma::linspace<arma::uvec>(fold_ind[fold],
-                                                   fold_ind[fold + 1] - 1,
-                                                   fold_ind[fold + 1] - fold_ind[fold]);
-      arma::uvec train = Set_Diff(sample_ind, test);
-      
-      // Initialization of the WEN objects (with the maximum value of lambda_sparsity_grid)
-      CPGLIB CPGLIB_fold = CPGLIB(x.rows(train), y.elem(train),
-                                  type, 
-                                  G, 
-                                  include_intercept,
-                                  alpha_s, alpha_d,
-                                  lambda_sparsity_opt, lambda_diversity_grid[0],
-                                  permutate_search,
-                                  acceleration,
-                                  tolerance, max_iter);
-      
-      // Looping over the different diversity penalty parameters
-      for(int diversity_ind = 0; diversity_ind < n_lambda_diversity; diversity_ind++){
-        
-        // Setting the lambda_sparsity value
-        CPGLIB_fold.Set_Lambda_Diversity(lambda_diversity_grid[diversity_ind]);
-        // Computing the betas for the fold (new lambda_sparsity)
-        CPGLIB_fold.Cycle_Groups_Balanced();
-        // Computing the deviance for the fold (new lambda_sparsity)
-        Compute_CV_Deviance_Diversity(diversity_ind,
-                                      x.rows(test), y.elem(test),
-                                      CPGLIB_fold.Get_Intercept_Scaled(), CPGLIB_fold.Get_Coef_Scaled());
-        
-      } // End of loop over the sparsity parameter values
-      
-    } // End of loop over the folds
-    
-    // Storing the optimal diversity parameters
+    cv_errors_diversity = arma::mean(cv_errors_diversity_mat, 1);
     index_diversity_opt = cv_errors_diversity.index_min();
     lambda_diversity_opt = lambda_diversity_grid[index_diversity_opt];
     cv_opt_new = arma::min(cv_errors_diversity);
@@ -540,7 +401,6 @@ void CV_CPGLIB::Get_CV_Sparsity_Initial(){
                                           include_intercept, 
                                           alpha_s,
                                           n_lambda_sparsity,
-                                          acceleration,
                                           tolerance, max_iter,
                                           n_folds,
                                           n_threads);
@@ -564,17 +424,13 @@ void CV_CPGLIB::Compute_CV_Betas(){
 
   // Initial iteration with no diversity
   Get_CV_Sparsity_Initial();
-  double cv_opt_no_diversity = cv_opt_old = cv_opt_new;
 
   // Variables to store the old penalty parameters
   double lambda_sparsity_opt_old, lambda_diversity_opt_old;
   
-  // // Initial cycle
+  // Initial cycle
   bool diversity_search = true;
-  if(balanced_cycling)
-    Compute_CV_Grid_Balanced(sample_ind, fold_ind, diversity_search);
-  else
-    Compute_CV_Grid(sample_ind, fold_ind, diversity_search);
+  Compute_CV_Grid(sample_ind, fold_ind, diversity_search);
   
   // // Print iteration data to console (commented out for package)
   // std::cout << "Iteration 1: " << std::endl;
@@ -584,7 +440,7 @@ void CV_CPGLIB::Compute_CV_Betas(){
   // std::cout << "lambda_diversity_opt: " << lambda_diversity_opt << std::endl << std::endl;
 
   // Adjustment for ensemble
-  lambda_sparsity_opt = lambda_diversity_opt/G;
+  lambda_sparsity_opt = lambda_sparsity_grid[0];
   // Computing the solutions until the optimal is no longer a significant improvement
   arma::uword cv_iterations = 1;
   do{
@@ -596,10 +452,7 @@ void CV_CPGLIB::Compute_CV_Betas(){
     
     // New search over the penalty parameters
     diversity_search = !diversity_search;
-    if(balanced_cycling)
-      Compute_CV_Grid_Balanced(sample_ind, fold_ind, diversity_search);
-    else
-      Compute_CV_Grid(sample_ind, fold_ind, diversity_search);
+    Compute_CV_Grid(sample_ind, fold_ind, diversity_search);
     
     cv_iterations++;
     
@@ -629,49 +482,26 @@ void CV_CPGLIB::Compute_CV_Betas(){
                               G, 
                               include_intercept,
                               alpha_s, alpha_d,
-                              lambda_sparsity_grid[n_lambda_sparsity-1], lambda_diversity_opt,
-                              permutate_search,
-                              acceleration,
+                              lambda_sparsity_grid[0], lambda_diversity_opt,
                               tolerance, max_iter);
   
   // Initial parameters computation
-  if(balanced_cycling)
-    CPGLIB_full.Cycle_Groups_Balanced_Grid();
-  else
-    CPGLIB_full.Cycle_Groups_Grid();
-  intercepts.col(n_lambda_sparsity-1) =  CPGLIB_full.Get_Intercept_Scaled();
-  betas.slice(n_lambda_sparsity-1) = CPGLIB_full.Get_Coef_Scaled();
+  CPGLIB_full.Compute_Coef();
+  intercepts.col(0) =  CPGLIB_full.Get_Intercept_Scaled();
+  betas.slice(0) = CPGLIB_full.Get_Coef_Scaled();
 
-  if(balanced_cycling){
+  // Looping over the different sparsity penalty parameters
+  for(arma::uword sparsity_ind = 1; sparsity_ind < n_lambda_sparsity; sparsity_ind++){
     
-    // Looping over the different sparsity penalty parameters
-    for(int sparsity_ind=n_lambda_sparsity-1; sparsity_ind>=0; sparsity_ind--){
-      
-      // Setting the lambda_sparsity value
-      CPGLIB_full.Set_Lambda_Sparsity(lambda_sparsity_grid[sparsity_ind]);
-      // Computing the betas for the fold (new lambda_sparsity)
-      CPGLIB_full.Cycle_Groups_Balanced();
-      // Storing the full data models
-      intercepts.col(sparsity_ind) =  CPGLIB_full.Get_Intercept_Scaled();
-      betas.slice(sparsity_ind) = CPGLIB_full.Get_Coef_Scaled();
-      
-    } // End of loop over the sparsity parameter values
-  }
-  else{
+    // Setting the lambda_sparsity value
+    CPGLIB_full.Set_Lambda_Sparsity(lambda_sparsity_grid[sparsity_ind]);
+    // Computing the betas for the fold (new lambda_sparsity)
+    CPGLIB_full.Compute_Coef();
+    // Storing the full data models
+    intercepts.col(sparsity_ind) =  CPGLIB_full.Get_Intercept_Scaled();
+    betas.slice(sparsity_ind) = CPGLIB_full.Get_Coef_Scaled();
     
-    // Looping over the different sparsity penalty parameters
-    for(arma::uword sparsity_ind = 1; sparsity_ind < n_lambda_sparsity; sparsity_ind++){
-      
-      // Setting the lambda_sparsity value
-      CPGLIB_full.Set_Lambda_Sparsity(lambda_sparsity_grid[sparsity_ind]);
-      // Computing the betas for the fold (new lambda_sparsity)
-      CPGLIB_full.Cycle_Groups();
-      // Storing the full data models
-      intercepts.col(sparsity_ind) =  CPGLIB_full.Get_Intercept_Scaled();
-      betas.slice(sparsity_ind) = CPGLIB_full.Get_Coef_Scaled();
-      
-    } // End of loop over the sparsity parameter values
-  }
+  } // End of loop over the sparsity parameter values
   
 }
 
@@ -695,40 +525,20 @@ void CV_CPGLIB::Compute_CV_Betas_Full_Diversity(){
                               include_intercept,
                               alpha_s, alpha_d,
                               lambda_sparsity_grid[lambda_sparsity_grid.n_elem-1], lambda_diversity_opt,
-                              permutate_search,
-                              acceleration,
                               tolerance, max_iter);
   
-  if(balanced_cycling){
+  // Looping over the different sparsity penalty parameters
+  for(int sparsity_ind=n_lambda_sparsity-1; sparsity_ind>=0; sparsity_ind--){ 
     
-    // Looping over the different sparsity penalty parameters
-    for(int sparsity_ind=n_lambda_sparsity-1; sparsity_ind>=0; sparsity_ind--){
-      
-      // Setting the lambda_sparsity value
-      CPGLIB_full.Set_Lambda_Sparsity(lambda_sparsity_grid[sparsity_ind]);
-      // Computing the betas for the fold (new lambda_sparsity)
-      CPGLIB_full.Cycle_Groups_Balanced();
-      // Storing the full data models
-      intercepts.col(sparsity_ind) =  CPGLIB_full.Get_Intercept_Scaled();
-      betas.slice(sparsity_ind) = CPGLIB_full.Get_Coef_Scaled();
-      
-    } // End of loop over the sparsity parameter values
-  }
-  else{
+    // Setting the lambda_sparsity value
+    CPGLIB_full.Set_Lambda_Sparsity(lambda_sparsity_grid[sparsity_ind]);
+    // Computing the betas for the fold (new lambda_sparsity)
+    CPGLIB_full.Compute_Coef();
+    // Storing the full data models
+    intercepts.col(sparsity_ind) =  CPGLIB_full.Get_Intercept_Scaled();
+    betas.slice(sparsity_ind) = CPGLIB_full.Get_Coef_Scaled();
     
-    // Looping over the different sparsity penalty parameters
-    for(int sparsity_ind=n_lambda_sparsity-1; sparsity_ind>=0; sparsity_ind--){ 
-  
-      // Setting the lambda_sparsity value
-      CPGLIB_full.Set_Lambda_Sparsity(lambda_sparsity_grid[sparsity_ind]);
-      // Computing the betas for the fold (new lambda_sparsity)
-      CPGLIB_full.Cycle_Groups();
-      // Storing the full data models
-      intercepts.col(sparsity_ind) =  CPGLIB_full.Get_Intercept_Scaled();
-      betas.slice(sparsity_ind) = CPGLIB_full.Get_Coef_Scaled();
-  
-    } // End of loop over the sparsity parameter values
-  }
+  } // End of loop over the sparsity parameter values
 
 }
 
@@ -757,23 +567,6 @@ double CV_CPGLIB::Logistic_Deviance(arma::mat x, arma::vec y,
   arma::vec linear_fit = arma::mean(intercept) + x*arma::mean(betas,1);
   return(2*arma::accu(arma::log(1 + arma::exp(linear_fit)) - linear_fit % y));
 }
-
-// Static FUnctions - Gamma Deviance
-double CV_CPGLIB::Gamma_Deviance(arma::mat x, arma::vec y, 
-                                 arma::vec intercept, arma::mat betas){
-  
-  arma::vec linear_fit = arma::mean(intercept) + x*arma::mean(betas,1);
-  return(2*arma::accu(linear_fit + arma::exp(-linear_fit) % y));
-}
-
-// Static FUnctions - Poisson Deviance
-double CV_CPGLIB::Poisson_Deviance(arma::mat x, arma::vec y, 
-                                   arma::vec intercept, arma::mat betas){
-  
-  arma::vec linear_fit = arma::mean(intercept) + x*arma::mean(betas,1);
-  return(2*arma::accu(arma::exp(linear_fit) - linear_fit % y));
-}
-
 
 
 

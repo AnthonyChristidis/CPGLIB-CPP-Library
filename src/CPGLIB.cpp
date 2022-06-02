@@ -32,8 +32,6 @@ CPGLIB::CPGLIB(arma::mat x, arma::vec y,
                arma::uword & include_intercept,
                double alpha_s, double alpha_d,
                double lambda_sparsity, double lambda_diversity,
-               arma::uword & permutate_search,
-               arma::uword & acceleration,
                double tolerance, arma::uword max_iter):
   x(x), y(y),
   type(type),
@@ -41,8 +39,6 @@ CPGLIB::CPGLIB(arma::mat x, arma::vec y,
   include_intercept(include_intercept),
   alpha_s(alpha_s), alpha_d(alpha_d),
   lambda_sparsity(lambda_sparsity), lambda_diversity(lambda_diversity),
-  permutate_search(permutate_search),
-  acceleration(acceleration),
   tolerance(tolerance), max_iter(max_iter){
   
   // Initializing the object
@@ -79,6 +75,7 @@ void CPGLIB::Initialize(){
     Compute_Likelihood = &CPGLIB::Linear_Likelihood;
     Compute_Gradient = &CPGLIB::Linear_Gradient;
     Compute_Expected = &CPGLIB::Linear_Expected;
+    step_size = 2 / arma::max(arma::eig_sym(x_std_aug.t() * x_std_aug));
     
     if(include_intercept)
       betas[0] = arma::mean(y);
@@ -89,40 +86,13 @@ void CPGLIB::Initialize(){
     Compute_Likelihood = &CPGLIB::Logistic_Likelihood;
     Compute_Gradient = &CPGLIB::Logistic_Gradient;
     Compute_Expected = &CPGLIB::Logistic_Expected;
+    step_size = 4 / arma::max(arma::eig_sym(x_std_aug.t() * x_std_aug));
     
     if(include_intercept)
       betas[0] = std::log(arma::mean(y)/(1-arma::mean(y)));
   }
-  
-  else if(type==3){ // Gamma GLM
-    
-    Compute_Likelihood = &CPGLIB::Gamma_Likelihood;
-    Compute_Gradient = &CPGLIB::Gamma_Gradient;
-    Compute_Expected = &CPGLIB::Gamma_Expected; 
-    if(include_intercept)
-      betas[0] = std::log(arma::mean(y));
-  }
-  
-  else if(type==4){ // Poisson GLM
-    
-    Compute_Likelihood = &CPGLIB::Poisson_Likelihood;
-    Compute_Gradient = &CPGLIB::Poisson_Gradient;
-    Compute_Expected = &CPGLIB::Poisson_Expected;
-    
-    if(include_intercept)
-      betas[0] = std::log(arma::mean(y));
-  }
-  
-  // Gradient step sizes options 
-  Compute_Gradient_Step = &CPGLIB::AdaGrad;
-  
-  // Gradient proposals
-  if(acceleration)
-    Proposal_Iteration = &CPGLIB::FISTA;
-  else 
-    Proposal_Iteration = &CPGLIB::ISTA;
 }
-
+  
 // Iterative Soft function
 arma::vec CPGLIB::Soft(arma::vec & u, 
                        arma::vec & threshold, arma::vec & scale){ 
@@ -229,18 +199,16 @@ void CPGLIB::Compute_Lambda_Diversity_Max(){
                              include_intercept,
                              alpha_s, alpha_d, 
                              lambda_sparsity, lambda_diversity_max,
-                             permutate_search,
-                             acceleration,
                              MAX_DIVERSITY_TOLERANCE, max_iter);
   
-  betas_grid.Cycle_Groups_Balanced();
+  betas_grid.Compute_Coef();
   arma::uword counter = 0;
   // While interactions remain, increase lambda_diversity_max by scaling it by a constant factor of two
   while(Check_Interactions_Beta(betas_grid.Get_Coef_Scaled()) & (counter<=GRID_INTERACTION_MAX_COUNTER)){ 
     
     lambda_diversity_max *= 2;
     betas_grid.Set_Lambda_Diversity(lambda_diversity_max);
-    betas_grid.Cycle_Groups_Balanced();
+    betas_grid.Compute_Coef();
     counter++;
   }
 
@@ -266,7 +234,7 @@ void CPGLIB::Compute_Lambda_Diversity_Max(){
     for(int diversity_ind=DIVERSITY_GRID_SIZE-1; diversity_ind>=0; diversity_ind--){
       
       betas_grid.Set_Lambda_Diversity(lambda_diversity_grid[diversity_ind]);
-      betas_grid.Cycle_Groups_Balanced();
+      betas_grid.Compute_Coef();
       beta_grid_candidates.slice(diversity_ind) = betas_grid.Get_Coef_Scaled();
     }
     
@@ -396,7 +364,6 @@ void CPGLIB::Initialize_Betas_No_Diversity(){
                                    include_intercept,
                                    alpha_s,
                                    lambda_sparsity,
-                                   acceleration,
                                    tolerance, max_iter);
   
   // Coefficients Computation
@@ -436,7 +403,7 @@ double CPGLIB::Get_Objective_Value(){
 }
 
 // Function to compute coefficients
-void CPGLIB::Compute_Coef(arma::uword & group){
+void CPGLIB::Coef_Update(arma::uword & group){
 
   // Variables for proximal gradient descent
   arma::vec proposal = betas.col(group);
@@ -445,226 +412,42 @@ void CPGLIB::Compute_Coef(arma::uword & group){
   arma::vec prox_threshold, prox_scale;
   arma::vec prox_threshold_step = lambda_sparsity*alpha_s + lambda_diversity*alpha_d*Beta_Weights_Abs(group)/2;
   arma::vec prox_scale_step = lambda_sparsity*(1-alpha_s) + lambda_diversity*(1-alpha_d)*Beta_Weights_Sq(group)/2;
-  
-  // Variables for Nesterov acceleration
-  double t_prev = 1, t_next = 1;
-  
-  // Initial gradient computation
-  Compute_Gradient(x_std_aug, y, proposal, grad_vector);
-  Compute_Gradient_Step(grad_step, grad_vector);
-  
-  // Proximal gradient descent iterations
-  do{
-    
-    betas.col(group) = new_betas.col(group);
-    Compute_Gradient(x_std_aug, y, proposal, grad_vector);
-    Compute_Gradient_Step(grad_step, grad_vector);
-    
-    // Line search for (local) descent (with acceleration)
-    do{
-      
-      // Proximal gradient descent starma::mat & new_betasep
-      prox_vector = proposal - grad_step % grad_vector;
-      prox_threshold = grad_step % prox_threshold_step;
-      prox_scale = grad_step % prox_scale_step;
-      new_betas.col(group) = Soft(prox_vector, prox_threshold, prox_scale);
-      new_betas.col(group)[0] = prox_vector[0]; // Adjustment for intercept term (no shrinkage)
-      
-      // Line search adjustment
-      grad_step = grad_step*LS_CONST_PARAMETER;
-      
-    } while (Get_Objective_Value_New(group) > Get_Objective_Value(group));
-    
-    // (!) The above conditional can be replaced by the quadratic approximation 
-    
-    // Iteration proposal
-    Proposal_Iteration(t_prev, t_next,  
-                       betas, new_betas, proposal,
-                       group); 
-    
-    // Iteration for algorithm
-    iter_count++;
 
-  } while ((iter_count <= max_iter) && (arma::max(arma::square(new_betas.col(group) - betas.col(group))) > tolerance));
-  
-  // Final coefficients
+  // Proximal gradient descent iteration
   betas.col(group) = new_betas.col(group);
+  Compute_Gradient(x_std_aug, y, proposal, grad_vector);
+  prox_vector = proposal - grad_vector*step_size;
+  prox_threshold = step_size*prox_threshold_step;
+  prox_scale = step_size*prox_scale_step;
+  new_betas.col(group) = Soft(prox_vector, prox_threshold, prox_scale);
+  new_betas.col(group)[0] = prox_vector[0]; // Adjustment for intercept term (no shrinkage)
 }
 
 // Cycling over the groups
-void CPGLIB::Cycle_Groups(){
+void CPGLIB::Compute_Coef(){
   
-  for(arma::uword group_ind=0; group_ind<G; group_ind++)
-    Compute_Coef(group_ind);
-  
-  // Permutation search
-  if(permutate_search){
+  for(arma::uword iter=0; iter<max_iter; iter++){
     
-    // Variable to store indicator
-    arma::uword permutate_iter_cycles = std::ceil(G/2.0);
-    arma::uword group_id;
-    double objective_old;
-    arma::mat betas_old;
-    
-    for(arma::uword permutate_iter=0; permutate_iter<permutate_iter_cycles; permutate_iter++){
-      
-      // Setting old betas
-      objective_old = Get_Objective_Value();
-      betas_old = betas;
-      
-      // Generating sampling order
-      Rcpp::IntegerVector group_order = Rcpp::sample(G, G, false);
-      
-      for(arma::uword group_ind=0; group_ind<G; group_ind++){
-        group_id = group_order[group_ind]-1;
-        Compute_Coef(group_id); 
-      }
-
-      // Conditional cycling update
-      if(Get_Objective_Value()>objective_old)
-        betas = new_betas = betas_old;
+    // Cycle over all variables for all groups
+    for(arma::uword group_ind=0; group_ind<G; group_ind++){
+      Coef_Update(group_ind);
     }
-  } // End of permutation cycling
-  
-  // Scaling coefficients
-  Scale_Coefficients();
-  Scale_Intercept();
-}
-
-// Cycling function for non-CV application
-void CPGLIB::Cycle_Groups_Grid(){
-  
-  // No diversity case
-  if(lambda_diversity==0){
     
-    // Initialization of the coefficients
-    Initialize_Betas_No_Diversity();
-    // Scaling coefficients
-    Scale_Coefficients();
-    Scale_Intercept();
-    return;
-  }
-
-  // Computing the grid for the diversity parameter
-  Compute_Lambda_Diversity_Max();
-  Compute_Lambda_Diversity_Grid();
-  
-  // Setting the set lambda_diversity
-  double lambda_diversity_set = lambda_diversity;
-
-  // Cycling over diversity parameter (stability)
-  for(arma::uword diversity_ind=1; diversity_ind<lambda_diversity_grid.n_elem; diversity_ind++){
-    
-    Set_Lambda_Diversity(lambda_diversity_grid[diversity_ind]);
-    if(lambda_diversity>=lambda_diversity_set)
-      break;
-    Cycle_Groups();
-  }
-    
-  // Final fit
-  Set_Lambda_Diversity(lambda_diversity_set);
-  Cycle_Groups();
-}
-
-// Function to update coefficients (balanced cycling)
-void CPGLIB::Cycle_Groups_Balanced(){
-  
-  // Variables for proximal gradient descent
-  arma::vec proposal = arma::zeros(p);
-  arma::vec prox_vector = arma::ones(p);
-  arma::vec prox_threshold = arma::zeros(p), prox_scale = arma::zeros(p);
-  arma::vec prox_threshold_step = arma::zeros(p), prox_scale_step = arma::zeros(p);
-  
-  // Iterations for cycling
-  for(arma::uword iter_cycling = 0; iter_cycling<max_iter; iter_cycling++){
-  
-    // Cycling over the groups
-    for(arma::uword group = 0; group<G; group++){
-    
-      // Variables for proximal gradient descent
-      proposal = betas.col(group);
-      prox_threshold_step = lambda_sparsity*alpha_s + lambda_diversity*alpha_d*Beta_Weights_Abs(group)/2;
-      prox_scale_step = lambda_sparsity*(1-alpha_s) + lambda_diversity*(1-alpha_d)*Beta_Weights_Sq(group)/2;
-      
-      // Gradient computation
-      Compute_Gradient(x_std_aug, y, proposal, grad_vector);
-      Compute_Gradient_Step(grad_step, grad_vector);
-
-      // Line search for (local) descent (with acceleration)
-      do{
-        
-        // Proximal gradient descent starma::mat & new_betasep
-        prox_vector = proposal - grad_step % grad_vector;
-        prox_threshold = grad_step % prox_threshold_step;
-        prox_scale = grad_step % prox_scale_step;
-        new_betas.col(group) = Soft(prox_vector, prox_threshold, prox_scale);
-        new_betas.col(group)[0] = prox_vector[0]; // Adjustment for intercept term (no shrinkage)
-
-        // Line search adjustment
-        grad_step = grad_step*LS_CONST_PARAMETER;
-        
-      } while (Get_Objective_Value_New(group) > Get_Objective_Value(group));
-      
-    } // End of cycling over the groups
-    
-    // End of proximal gradient descent if variables are already converged
+    // End of coordinate descent if variables are already converged
     if(arma::square(arma::mean(new_betas,1)-arma::mean(betas,1)).max()<tolerance){
-      
-      iter_count = iter_cycling;
       betas = new_betas;
       Scale_Coefficients();
       Scale_Intercept();
       return;
     }
-
-    // Iteration for cycling count
-    iter_count++;
+    
+    // Adjusting the intercept and betas
     betas = new_betas;
-
-  } // End of cycling iterations
+  }
   
-  // Scaling of coefficients
+  // Scaling of coefficients and intercept
   Scale_Coefficients();
   Scale_Intercept();
-  
-}
-
-// Cycling function for non-CV application
-void CPGLIB::Cycle_Groups_Balanced_Grid(){
-  
-  // No diversity case
-  if(lambda_diversity==0){
-    
-    // Initialization of the coefficients
-    Initialize_Betas_No_Diversity();
-    // Scaling coefficients
-    Scale_Coefficients();
-    Scale_Intercept();
-    return;
-  }
-  
-  // // Computing the grid for the diversity parameter
-  // Compute_Lambda_Diversity_Max();
-  // Compute_Lambda_Diversity_Grid();
-  
-  // Compute the grid over the sparsity parameter
-  Compute_Lambda_Sparsity_Grid();
-  
-  // Setting the set lambda_diversity
-  double lambda_sparsity_set = lambda_sparsity;
-  
-  // Cycling over diversity parameter (stability) 
-  for(arma::uword sparsity_ind=lambda_sparsity_grid.n_elem-1; sparsity_ind>0; sparsity_ind--){
-     
-    Set_Lambda_Sparsity(lambda_sparsity_grid[sparsity_ind]);
-    if(lambda_sparsity<=lambda_sparsity_set)
-      break;
-    Cycle_Groups_Balanced();
-  }
-  
-  // Final fit
-  Set_Lambda_Sparsity(lambda_sparsity_set);
-  Cycle_Groups_Balanced();
 }
 
 // Function to return the number of iterations for convergence
@@ -702,36 +485,6 @@ CPGLIB::~CPGLIB(){
   // Class destructor
 }
 
-// ----------------------------------
-// Static Functions - Gradient Steps_diversity
-// ----------------------------------
-
-void CPGLIB::AdaGrad(arma::vec & grad_step, arma::vec & grad_vector){
-  
-  grad_step = arma::ones(grad_vector.n_elem)/arma::norm(grad_vector);
-}
-
-/*
-* --------------------------------------
-* Static Functions - Descent Iterations
-* --------------------------------------
-*/
-
-// Gradient proposals iterations
-void CPGLIB::ISTA(double & t_prev, double & t_next, 
-                  arma::mat & betas, arma::mat & new_betas, arma::vec & proposal,
-                  arma::uword & group){
-  
-  t_next = (1 + std::pow(1 + 4*std::pow(t_prev, 2), 0.5))/2;
-  proposal = new_betas.col(group) + ((t_prev - 1)/t_next) * (new_betas.col(group) - betas.col(group));
-}
-
-void CPGLIB::FISTA(double & t_prev, double & t_next, 
-                   arma::mat & betas, arma::mat & new_betas, arma::vec & proposal,
-                   arma::uword & group){
-  
-  proposal = new_betas.col(group);
-}
 
 /*
 * -----------------------------------------------------------
@@ -756,21 +509,6 @@ double CPGLIB::Logistic_Likelihood(arma::mat & x, arma::vec & y,
   return(arma::accu(arma::log(1 + arma::exp(linear_fit)) - linear_fit % y)/y.n_elem);
 }
 
-double CPGLIB::Gamma_Likelihood(arma::mat & x, arma::vec & y, 
-                                arma::mat & betas, 
-                                arma::uword & group){
-  
-  arma::vec linear_fit = x*betas.col(group);
-  return(arma::accu(linear_fit + arma::exp(x*(-betas)) % y)/y.n_elem);
-}
-
-double CPGLIB::Poisson_Likelihood(arma::mat & x, arma::vec & y, 
-                                  arma::mat & betas, 
-                                  arma::uword & group){
-  
-  arma::vec linear_fit = x*betas.col(group);
-  return(arma::accu(arma::exp(linear_fit) - linear_fit % y)/y.n_elem);
-}
 
 /*
 * ------------------------------------------
@@ -794,22 +532,6 @@ void CPGLIB::Logistic_Gradient(arma::mat & x, arma::vec & y,
   grad_vector = x.t()*(1/(1 + arma::exp(-linear_fit)) - y)/y.n_elem;
 }
 
-// Gamma GLM - Gradient 
-void CPGLIB::Gamma_Gradient(arma::mat & x, arma::vec & y, 
-                            arma::mat & betas, arma::vec & grad_vector){
-  
-  arma::vec linear_fit = x*betas;
-  grad_vector = x.t()*(arma::ones(y.n_elem) - arma::exp(-linear_fit) % y)/y.n_elem;
-}
-
-// Poisson GLM - Gradient 
-void CPGLIB::Poisson_Gradient(arma::mat & x, arma::vec & y, 
-                              arma::mat & betas, arma::vec & grad_vector){
-  
-  arma::vec linear_fit = x*betas;
-  grad_vector = x.t()*(arma::exp(linear_fit) -  y)/y.n_elem;
-}
-
 
 /*
  * ------------------------------------------------
@@ -831,22 +553,6 @@ void CPGLIB::Logistic_Expected(arma::mat & x, arma::mat & betas,
                                arma::uword & group){
   
   expected_val.col(group) = 1/(1 + arma::exp(x*(-betas.col(group))));
-}
-
-// Gamma GLM - Expected Values 
-void CPGLIB::Gamma_Expected(arma::mat & x, arma::mat & betas, 
-                            arma::vec & expected_val,
-                            arma::uword & group){
-  
-  expected_val.col(group) = arma::exp(x*betas.col(group));
-}
-
-// Poisson GLM - Expected Values 
-void CPGLIB::Poisson_Expected(arma::mat & x, arma::mat & betas, 
-                              arma::vec & expected_val,
-                              arma::uword & group){
-  
-  expected_val.col(group) = arma::exp(x*betas.col(group));
 }
 
 

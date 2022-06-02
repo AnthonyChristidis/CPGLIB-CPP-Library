@@ -24,7 +24,6 @@ CV_ProxGrad::CV_ProxGrad(arma::mat & x, arma::vec & y,
                          arma::uword & include_intercept,
                          double & alpha_s, 
                          arma::uword & n_lambda_sparsity,
-                         arma::uword & acceleration,
                          double & tolerance, arma::uword & max_iter,
                          arma::uword & n_folds,
                          arma::uword & n_threads): 
@@ -33,7 +32,6 @@ CV_ProxGrad::CV_ProxGrad(arma::mat & x, arma::vec & y,
   include_intercept(include_intercept),
   alpha_s(alpha_s), 
   n_lambda_sparsity(n_lambda_sparsity), 
-  acceleration(acceleration),
   tolerance(tolerance), max_iter(max_iter),
   n_folds(n_folds),
   n_threads(n_threads){
@@ -54,6 +52,7 @@ void CV_ProxGrad::Initialize(){
   intercepts = arma::zeros(n_lambda_sparsity);
   betas = arma::zeros(p, n_lambda_sparsity);
   cv_errors_sparsity = arma::zeros(n_lambda_sparsity);
+  cv_errors_sparsity_mat = arma::zeros(n_lambda_sparsity, n_folds);
 
   // Computing the grid for lambda_sparsity
   if(n > p)
@@ -68,12 +67,6 @@ void CV_ProxGrad::Initialize(){
   }
   else if(type==2){ // Logistic GLM
     Compute_Deviance = &CV_ProxGrad::Logistic_Deviance;
-  }
-  else if(type==3){ // Gamma GLM
-    Compute_Deviance = &CV_ProxGrad::Gamma_Deviance;
-  }
-  else if(type==4){ // Poisson GLM
-    Compute_Deviance = &CV_ProxGrad::Poisson_Deviance;
   }
 }
 
@@ -116,13 +109,13 @@ arma::uvec CV_ProxGrad::Set_Diff(const arma::uvec & big, const arma::uvec & smal
 }
 
 // Private function to compute the CV-MSPE over the folds
-void CV_ProxGrad::Compute_CV_Deviance_Sparsity(arma::uword & sparsity_ind,
+void CV_ProxGrad::Compute_CV_Deviance_Sparsity(arma::uword & sparsity_ind, arma::uword & fold_ind,
                                                arma::mat x_test, arma::vec y_test,
                                                double intercept, arma::vec betas){
   
   // Computing the CV-Error over the folds
   for(arma::uword fold_ind=0; fold_ind<n_folds; fold_ind++)
-    cv_errors_sparsity[sparsity_ind] += (*Compute_Deviance)(x_test, y_test, intercept, betas) / n;
+    cv_errors_sparsity_mat(sparsity_ind, fold_ind) = (*Compute_Deviance)(x_test, y_test, intercept, betas);
   
 }
 
@@ -193,9 +186,6 @@ arma::uword CV_ProxGrad::Get_Optimal_Index_Sparsity(){
 // Computing the solutions over a grid for folds. Grid is either for the sparsity or the diverity (one of them is fixed)
 void CV_ProxGrad::Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind){
   
-  // Initializing the sparsity CV Errors
-  cv_errors_sparsity = arma::zeros(n_lambda_sparsity);
-  
   // Looping over the folds
   # pragma omp parallel for num_threads(n_threads)
   for(arma::uword fold=0; fold<n_folds; fold++){ 
@@ -212,7 +202,6 @@ void CV_ProxGrad::Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind
                                       include_intercept,
                                       alpha_s, 
                                       lambda_sparsity_grid[n_lambda_sparsity-1],
-                                      acceleration,
                                       tolerance, max_iter);
 
     // Looping over the different sparsity penalty parameters
@@ -224,7 +213,7 @@ void CV_ProxGrad::Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind
       ProxGrad_fold.Compute_Coef();
       
       // Computing the deviance for the fold (new lambda_sparsity)
-      Compute_CV_Deviance_Sparsity(sparsity_ind,
+      Compute_CV_Deviance_Sparsity(sparsity_ind, fold,
                                    x.rows(test), y.elem(test),
                                    ProxGrad_fold.Get_Intercept_Scaled(), ProxGrad_fold.Get_Coef_Scaled());
       
@@ -233,6 +222,7 @@ void CV_ProxGrad::Compute_CV_Grid(arma::uvec & sample_ind, arma::uvec & fold_ind
   } // End of loop over the folds
   
   // Storing the optimal sparsity parameters
+  cv_errors_sparsity = arma::mean(cv_errors_sparsity_mat, 1);
   index_sparsity_opt = cv_errors_sparsity.index_min();
   lambda_sparsity_opt = lambda_sparsity_grid[index_sparsity_opt];
   cv_opt_new = arma::min(cv_errors_sparsity);
@@ -254,7 +244,6 @@ void CV_ProxGrad::Compute_CV_Betas(){
                                     include_intercept,
                                     alpha_s,
                                     lambda_sparsity_grid[0],
-                                    acceleration,
                                     tolerance, max_iter);
   
   // Looping over the different sparsity penalty parameters
@@ -297,24 +286,6 @@ double CV_ProxGrad::Logistic_Deviance(arma::mat & x, arma::vec & y,
   arma::vec linear_fit = intercept + x*betas;
   return(2*arma::accu(arma::log(1 + arma::exp(linear_fit)) - linear_fit % y));
 }
-
-// Gamma Deviance
-double CV_ProxGrad::Gamma_Deviance(arma::mat & x, arma::vec & y,
-                                   double & intercept, arma::vec & betas){
-  
-  arma::vec linear_fit = intercept + x*betas;
-  return(2*arma::accu(linear_fit + arma::exp(x*(-betas)) % y));
-}
-
-// Poisson Deviance
-double CV_ProxGrad::Poisson_Deviance(arma::mat & x, arma::vec & y,
-                                     double & intercept, arma::vec & betas){
-  
-  arma::vec linear_fit = intercept + x*betas;
-  return(2*arma::accu(arma::exp(linear_fit) - linear_fit % y));
-}
-
-
 
 
 

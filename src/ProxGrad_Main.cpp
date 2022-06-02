@@ -21,7 +21,6 @@ Rcpp::List ProxGrad_Main(arma::mat & x, arma::vec & y,
                          arma::uword & type, 
                          arma::uword & include_intercept, 
                          double & alpha_s,
-                         arma::uword & acceleration,
                          double & lambda_sparsity,
                          double & tolerance, arma::uword & max_iter){
   
@@ -29,7 +28,6 @@ Rcpp::List ProxGrad_Main(arma::mat & x, arma::vec & y,
                             type, include_intercept, 
                             alpha_s, 
                             lambda_sparsity, 
-                            acceleration, 
                             tolerance, max_iter);
   
   // Computing coefficients
